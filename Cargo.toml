@@ -1,0 +1,12 @@
+[package]
+name = "rust-odemcd"
+version = "0.1.0"
+authors = ["damody <liam.huang@4ipnet.com>"]
+
+[dependencies]
+rust-ini = "0.10"
+log = "0.4"
+simplelog = "^0.5.0"
+beanstalkd = {path ="../rust-beanstalkd"}
+multiqueue = "0.3.2"
+quick-protobuf = "0.6.0"

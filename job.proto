@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+message odemcdJob {
+  required int32 job_type = 1;
+  required int32 device_id =  2;
+  message setting {
+    required string key = 1;
+    required string val = 2;
+  }
+  repeated map<string,string> values = 3;
+}
