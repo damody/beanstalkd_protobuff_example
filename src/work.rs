@@ -1,3 +1,6 @@
+// for use c function "system"
+extern crate libc;
+use std::ffi::CString;
 
 pub enum DeviceOp {
     DEVOP_DONOTHING=0,
@@ -221,3 +224,45 @@ pub const MAX_FW_FILE_NAME:u16 = 128;
 pub const MAX_FW_VERSION:u16 = 32;
 pub const MAX_FW_CHKSUM:u16 = 32;
 pub const MAX_FW_REMARK:u16 = 128;
+
+/// dev_info_struct
+pub struct DeviceInfo {
+    // mapping to ems.db
+    dev_id: i32,
+    dev_type: i32,
+    name: String,
+    ip: String,
+    control_tunnel_ip: String,
+    data_tunnel_ip: String,
+    mac: String,
+    admin: String,
+    passwd: String,
+    version: String,
+    snmp_read: String,
+    snmp_write: String,
+    vlan_id: i32,
+    rogue_rfcard: i32,
+    aplb_rfcard: i32,
+    capwap: i32,
+
+    // mapping to emrt.db
+    state: i32,
+    discover_verify: i32,
+    vm_update: i32,
+
+    //dev_type_info
+    rf_num: i32,
+    vap_num: i32,
+    chip_vendor: String,
+    enterprise_oid: String,
+    support_version: String,
+    support_model: String,
+    support_gps: i32,
+}
+
+pub fn getpid() -> i32 {
+    let pid:i32 = unsafe {
+        libc::getpid()
+    };
+    pid
+}

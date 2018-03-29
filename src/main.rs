@@ -7,6 +7,7 @@ use job::*;
 mod work;
 use work::*;
 
+
 extern crate quick_protobuf;
 
 #[macro_use]
@@ -29,6 +30,15 @@ extern crate multiqueue;
 
 use std::borrow::Cow;
 use quick_protobuf::Writer;
+use quick_protobuf::Reader;
+use quick_protobuf::{MessageRead, BytesReader};
+
+// use json
+#[macro_use]
+extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
+use serde_json::Value;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -55,7 +65,7 @@ fn main() {
     job.values.insert(Cow::Borrowed("template"), Cow::Borrowed("1"));
     job.values.insert(Cow::Borrowed("group"), Cow::Borrowed("general-vap_config-security-advanced-hotspot20-firewall-linkfy"));
     
-    let mut buf = Vec::new();
+    let mut buf:Vec<u8> = vec!['p' as u8];
     {
         let mut writer = Writer::new(&mut buf);
         writer.write_message(&job);
@@ -67,12 +77,11 @@ fn main() {
             panic!("beanstalkd can not connection!\n{}",e);
         });
     beanstalkd.tube("rust").unwrap();
-    //println!("{:?}", buf);
-    for _ in 0..1000 {
-        beanstalkd.put_u8(&buf, 10000, 0, 10000);
-    }
+    beanstalkd.put_u8(&buf, 10000, 0, 60);
+    let send = String::from("j") + &json!(job).to_string();
+    beanstalkd.put(&send, 10000, 0, 60);
     // do work
-    for _ in 0..config.job_slave_number {
+    for _ in 0..1 { //config.job_slave_number
         thread::spawn(move || {
             let mut beanstalkd = Beanstalkd::localhost().unwrap_or_else(
                 |e|{
@@ -80,46 +89,71 @@ fn main() {
                     panic!("beanstalkd can not connection!\n{}",e);
                 });
             beanstalkd.watch("rust").unwrap();
+            beanstalkd.ignore("default").unwrap();
+            
             loop {
-                let (id, body) = beanstalkd.reserve_with_timeout(1).unwrap();
+                let (id, mut body) = beanstalkd.reserve_with_timeout(1).unwrap();
+                
                 if body == "TIMED_OUT" {
                 } else {
-                    println!("{:?}", body);
-                    let _ = beanstalkd.delete(id);
-                    let received = WorkData::Ping(body);
-                    match received {
-                        WorkData::Ping(d) => {
+                    let mut bytes: Vec<u8> = body.as_bytes().to_vec();
+                    let ch = bytes[0] as char;
+                    // json
+                    let job = if ch == 'j' { 
+                        body.drain(0..1);
+                        let r: odemcdJob = serde_json::from_str(&body).unwrap();
+                        r
+                    }
+                    // protobuf
+                    else if ch == 'p' { 
+                        bytes.drain(0..1);
+                        let mut reader = BytesReader::from_bytes(&bytes);
+                        let r = odemcdJob::from_reader(&mut reader, &bytes).unwrap();
+                        r
+                    } else {
+                        Default::default()
+                    };
+                    println!("{:?}", job);
+                    match job.job_type {
+                        DEVOP_PING => {
                         },
-                        WorkData::Report(d) => {
+                        DEVOP_DISCOVER_VERIFY => {
                         },
-                        WorkData::OpenSNMP(d) => {
+                        DEVOP_REPORT => {
                         },
-                        WorkData::Backup(d) => {
+                        DEVOP_DISCOVER => {
                         },
-                        WorkData::Restore(d) => {
+                        DEVOP_BACKUP => {
                         },
-                        WorkData::Upgrade(d) => {
+                        DEVOP_RESTORE => {
                         },
-                        WorkData::Template(d) => {
+                        DEVOP_UPGRADE => {
                         },
-                        WorkData::Wall(d) => {
+                        DEVOP_OPENSNMP => {
                         },
-                        WorkData::Config(d) => {
+                        DEVOP_TEMPLATE => {
                         },
-                        WorkData::TunnelInterface(d) => {
+                        DEVOP_CHANGE_PASWD => {
                         },
-                        WorkData::ChangePassword(d) => {
+                        DEVOP_UPDATE_CONFIG => {
                         },
-                        WorkData::SetPower(d) => {
+                        DEVOP_SETPOWER => {
                         },
-                        WorkData::Scanning(d) => {
+                        DEVOP_SCANNING => {
                         },
-                        WorkData::SetDeviceName(d) => {
+                        DVOP_WALL => {
                         },
-                        WorkData::AutoDeployTemplate(d) => {
+                        DEVOP_CONFIG => {
+                        },
+                        DEVOP_TUNIF => {
+                        },
+                        DEVOP_SETDEVNAME => {
+                        },
+                        DEVOP_AUTODEPLOY_TEMPLATE => {
                         },
                         _ => {},
                     }
+                    let _ = beanstalkd.delete(id);
                 }
             }
         });

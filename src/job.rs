@@ -16,7 +16,7 @@ use quick_protobuf::{MessageRead, MessageWrite, BytesReader, Writer, Result};
 use quick_protobuf::sizeofs::*;
 use super::*;
 
-#[derive(Debug, Default, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub struct odemcdJob<'a> {
     pub job_type: i32,
     pub device_id: i32,
@@ -26,6 +26,7 @@ pub struct odemcdJob<'a> {
 impl<'a> MessageRead<'a> for odemcdJob<'a> {
     fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
         let mut msg = Self::default();
+        r.read_int64(bytes)?;
         while !r.is_eof() {
             match r.next_tag(bytes) {
                 Ok(8) => msg.job_type = r.read_int32(bytes)?,
@@ -56,47 +57,5 @@ impl<'a> MessageWrite for odemcdJob<'a> {
         for (k, v) in self.values.iter() { w.write_with_tag(26, |w| w.write_map(2 + sizeof_len((k).len()) + sizeof_len((v).len()), 10, |w| w.write_string(&**k), 18, |w| w.write_string(&**v)))?; }
         Ok(())
     }
-}
-
-pub mod mod_odemcdJob {
-
-use std::borrow::Cow;
-use super::*;
-
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct setting<'a> {
-    pub key: Cow<'a, str>,
-    pub val: Cow<'a, str>,
-}
-
-impl<'a> MessageRead<'a> for setting<'a> {
-    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
-        let mut msg = Self::default();
-        while !r.is_eof() {
-            match r.next_tag(bytes) {
-                Ok(10) => msg.key = r.read_string(bytes).map(Cow::Borrowed)?,
-                Ok(18) => msg.val = r.read_string(bytes).map(Cow::Borrowed)?,
-                Ok(t) => { r.read_unknown(bytes, t)?; }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(msg)
-    }
-}
-
-impl<'a> MessageWrite for setting<'a> {
-    fn get_size(&self) -> usize {
-        0
-        + 1 + sizeof_len((&self.key).len())
-        + 1 + sizeof_len((&self.val).len())
-    }
-
-    fn write_message<W: Write>(&self, w: &mut Writer<W>) -> Result<()> {
-        w.write_with_tag(10, |w| w.write_string(&**&self.key))?;
-        w.write_with_tag(18, |w| w.write_string(&**&self.val))?;
-        Ok(())
-    }
-}
-
 }
 
