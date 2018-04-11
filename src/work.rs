@@ -1,7 +1,38 @@
 // for use c function "system"
 extern crate libc;
 use std::ffi::CString;
+use std::error::Error;
 
+extern crate url;
+use self::url::form_urlencoded;
+
+extern crate subprocess;
+use self::subprocess::Exec;
+use self::subprocess::Redirection;
+use std::collections::HashMap;
+
+use job::*;
+use web::*;
+
+extern crate select;
+use self::select::document::Document;
+use self::select::predicate::{Predicate, Attr, Class, Name};
+
+extern crate regex;
+use self::regex::Regex;
+
+extern crate strfmt;
+use self::strfmt::strfmt;
+
+use std::env;
+use std::fs::File;
+use std::io::prelude::*;
+
+#[allow(non_camel_case_types)]
+
+enum_from_primitive! {
+#[allow(non_camel_case_types)]
+#[derive(Debug, PartialEq)]
 pub enum DeviceOp {
     DEVOP_DONOTHING=0,
     DEVOP_PING,
@@ -27,7 +58,51 @@ pub enum DeviceOp {
     DEVOP_SETDEVNAME,
     DEVOP_AUTODEPLOY_TEMPLATE,
     // For future, if someone want to add device operation, please insert before DEVOP_NUM.
-    DEVOP_NUM
+    DEVOP_NUM,
+}
+}
+
+/// dev_info_struct
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+pub struct DeviceInfo {
+    // mapping to ems.db
+    pub dev_id: i32,
+    pub dev_type: i32,
+    pub name: String,
+    pub ip: String,
+    pub control_tunnel_ip: String,
+    pub data_tunnel_ip: String,
+    pub mac: String,
+    pub admin: String,
+    pub passwd: String,
+    pub version: String,
+    pub snmp_read: String,
+    pub snmp_write: String,
+    pub vlan_id: i32,
+    pub rogue_rfcard: i32,
+    pub aplb_rfcard: i32,
+    pub capwap: i8,
+
+    // mapping to emrt.db
+    pub state: i32,
+    pub discover_verify: i32,
+    pub vm_update: i32,
+
+    //dev_type_info
+    pub rf_num: i32,
+    pub vap_num: i32,
+    pub chip_vendor: String,
+    pub enterprise_oid: String,
+    pub support_version: String,
+    pub support_model: String,
+    pub support_gps: i32,
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct WorkPack {
+    pub dev: DeviceInfo,
+    pub job: odemcdJob,
 }
 
 pub enum WorkData {
@@ -48,6 +123,7 @@ pub enum WorkData {
     AutoDeployTemplate(String),
 }
 
+#[allow(non_camel_case_types)]
 pub enum DeviceState {
     DEVST_ONLINE=1,
     DEVST_OFFLINE,
@@ -225,44 +301,194 @@ pub const MAX_FW_VERSION:u16 = 32;
 pub const MAX_FW_CHKSUM:u16 = 32;
 pub const MAX_FW_REMARK:u16 = 128;
 
-/// dev_info_struct
-pub struct DeviceInfo {
-    // mapping to ems.db
-    dev_id: i32,
-    dev_type: i32,
-    name: String,
-    ip: String,
-    control_tunnel_ip: String,
-    data_tunnel_ip: String,
-    mac: String,
-    admin: String,
-    passwd: String,
-    version: String,
-    snmp_read: String,
-    snmp_write: String,
-    vlan_id: i32,
-    rogue_rfcard: i32,
-    aplb_rfcard: i32,
-    capwap: i32,
-
-    // mapping to emrt.db
-    state: i32,
-    discover_verify: i32,
-    vm_update: i32,
-
-    //dev_type_info
-    rf_num: i32,
-    vap_num: i32,
-    chip_vendor: String,
-    enterprise_oid: String,
-    support_version: String,
-    support_model: String,
-    support_gps: i32,
-}
 
 pub fn getpid() -> i32 {
     let pid:i32 = unsafe {
         libc::getpid()
     };
     pid
+}
+
+pub fn access(path:&String, amode:i32) -> i32 {
+    let path = CString::new(path.as_bytes()).unwrap();
+    let ret = unsafe {
+        libc::access(path.as_c_str().as_ptr(), amode)
+    };
+    ret
+}
+
+fn verify_version(ap_version:&String, gw_support_version:&String) -> Result<i32, Box<Error>> {
+    debug!("ap_version: {} , gw_support_version: {}", ap_version, gw_support_version);
+    let ap1: i32;
+    let ap2: i32;
+    scan!(ap_version.bytes() => "{}.{}", ap1, ap2);
+
+    let gw1: i32;
+    let gw2: i32;
+    scan!(gw_support_version.bytes() => "{}.{}", gw1, gw2);
+
+    if ap1 == gw1 && ap2 == gw2 {
+        Ok(0)
+    } else {
+        Err(From::from("version error"))
+    }
+    
+}
+
+pub fn discover_verify(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    let raw_html = get_http(&format!("http://{}/{}", dev.ip, A800G_URL_STATUS_DETAIL668));
+    if raw_html.is_ok() {
+        let raw_html:String = raw_html.unwrap();
+        //println!("{}", raw_html.unwrap());
+        let document = Document::from(raw_html.as_str());
+        let mut data:HashMap<String,String> = HashMap::new();
+        for node in document.find(Class("list_table")) {
+            for node in node.find(Name("tr")) {
+                let tags = node.find(Name("td")).map(|tag| tag.text()).collect::<Vec<_>>();
+                if tags.len() == 2 {
+                    data.insert(tags[0].clone(), tags[1].trim().to_string());
+                }
+            }
+        }
+        
+        let package_version = data.get("Package Version").unwrap().clone();
+        let re = Regex::new(r##"(PKG_.+_CVSTAG)="(.+)""##).unwrap();
+        let pkg:HashMap<String,String> = re.captures_iter(package_version.as_str()).map(|tag| {
+            ((&tag[1]).to_string(), (&tag[2]).to_string())
+            }).collect();
+        let firmware_version = &data.get("Firmware Version").unwrap();
+        let product_model = &data.get("Product Model").unwrap();
+        
+        verify_version(&dev.version, firmware_version)?;
+        if dev.support_model.as_str() != product_model.as_str() {
+            error!("ProductModel error: {} != {}", dev.support_model, product_model);
+            return Err(From::from("ProductModel error"))
+        }
+        //Package Version
+        Ok(0)
+    } else {
+        Err(From::from("get http error"))
+    }
+}
+pub fn open_capwap(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    let mut encode_psw: String = String::new();
+    trace!("capwap {} {} {}", dev.ip, dev.admin, encode_psw);
+    encode_psw.extend(form_urlencoded::byte_serialize(dev.passwd.as_bytes()));;
+    let tmp_cmd = format!("/ramfs/od_emcd/bin/change_dev_config.sh {} {} {} set_capwap_tpl", dev.ip, dev.admin, encode_psw);
+    debug!("RUN:{}",tmp_cmd);
+    let mut p = Exec::shell(&tmp_cmd).popen();
+    if p.is_ok() {
+        Ok(0)
+    } else {
+        error!("capwap ERROR!: {}", tmp_cmd);
+        Err(From::from("capwap ERROR!"))
+    }
+}
+
+pub fn open_tunnel_interface(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    let mut vars = HashMap::new();
+    vars.insert("dev_id".to_string(), dev.dev_id);
+    let filename = strfmt(A800G_URL_TUNNEL_IF_MAC_FILE_PATH, &vars)?;
+    let mut f = File::open(filename)?;
+
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)?;
+
+    Ok(0)
+}
+
+pub fn apply_template(dev:&DeviceInfo, tpl:i32, group:&str, oid:&str, chip_vendor:&str) -> Result<i32, Box<Error>> {
+    let reboot = if &chip_vendor[..6] == "Ralink" {
+        1
+    } else {
+        0
+    };
+    let mut capwap_ret = 0;
+    if dev.capwap != 1 {
+        capwap_ret = open_capwap(dev)?;
+    }
+    if capwap_ret == 0 {
+        let tmp_cmd = if dev.data_tunnel_ip.len() > 4 && dev.capwap == 1 {
+            format!("/ramfs/od_emcd/bin/set_ap.sh '{}' '{}' '{}' '{}' '{}' '{}' '{}' '{}'", dev.control_tunnel_ip, dev.data_tunnel_ip, tpl, group, dev.snmp_read, dev.snmp_write, dev.dev_id, reboot)
+        } else {
+            format!("/ramfs/od_emcd/bin/set_ap.sh '{}' '{}' '{}' '{}' '{}' '{}' '{}' '{}'", dev.control_tunnel_ip, dev.control_tunnel_ip, tpl, group, dev.snmp_read, dev.snmp_write, dev.dev_id, reboot)
+        };
+
+        debug!("RUN:{}",tmp_cmd);
+        let mut out = Exec::cmd(&tmp_cmd).arg("2")
+            .stdout(Redirection::Pipe)
+            .capture()?
+            .stdout_str();
+        if out == "0" {
+            // dev_updatetpl
+            return Ok(0)
+        } else {
+            error!("Apply template ERROR!: {}", tmp_cmd);
+            return Err(From::from("Apply template ERROR!"))
+        }
+    }
+    Ok(0)
+}
+
+pub fn device_wall_garden(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    let file_path = format!("{}{}", A800G_URL_IPSET_RESTORE_LIST, dev.dev_id);
+    if access(&file_path, libc::F_OK) == 0 {
+        trace!("File exist: {}", file_path);
+    } else {
+        error!("Need API file: {}", file_path);
+        let config_cmd = format!("sh /ramfs/od_emcd/bin/split_tunnel_api.sh walledIPlist single-{}", dev.dev_id);
+        debug!("RUN: {}", config_cmd);
+        let mut p = Exec::shell(&config_cmd).popen();
+        if p.is_ok() {
+        } else {
+            error!("Do wall-garden API ERROR!: {}", config_cmd);
+            return Err(From::from("Do wall-garden API ERROR!"))
+        }
+    }
+    upload_wallgarden(dev, &file_path)?;
+    Ok(0)
+}
+
+pub fn device_config(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    if access(&A800G_URL_LOGOUT_IP_LIST_FILE_PATH.to_string(), libc::F_OK) == 0 {
+
+    } else {
+        let config_cmd = format!("sh /ramfs/od_emcd/bin/split_tunnel_api.sh logoutIPlist");
+        debug!("RUN: {}", config_cmd);
+        let mut p = Exec::shell(&config_cmd).popen();
+        if p.is_ok() {
+        } else {
+            error!("Do the logout ip API ERROR!: {}", config_cmd);
+            return Err(From::from("Do the logout ip API ERROR!"))
+        }
+    }
+    Ok(0)
+}
+
+pub fn device_change_password(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_upgrade(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_backup(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_restore_with_file(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_restore(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_set_name(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
+}
+
+pub fn device_set_txpower(dev:&DeviceInfo) -> Result<i32, Box<Error>> {
+    Ok(0)
 }

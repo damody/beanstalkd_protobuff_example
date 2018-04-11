@@ -17,13 +17,13 @@ use quick_protobuf::sizeofs::*;
 use super::*;
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub struct odemcdJob {
+pub struct odemcdJobf<'a> {
     pub job_type: i32,
     pub device_id: i32,
-    pub values: HashMap<String, String>,
+    pub values: HashMap<Cow<'a, str>, Cow<'a, str>>,
 }
 
-impl <'a> MessageRead<'a> for odemcdJob {
+impl<'a> MessageRead<'a> for odemcdJobf<'a> {
     fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
         let mut msg = Self::default();
         r.read_int64(bytes)?;
@@ -33,7 +33,7 @@ impl <'a> MessageRead<'a> for odemcdJob {
                 Ok(16) => msg.device_id = r.read_int32(bytes)?,
                 Ok(26) => {
                     let (key, value) = r.read_map(bytes, |r, bytes| r.read_string(bytes).map(Cow::Borrowed), |r, bytes| r.read_string(bytes).map(Cow::Borrowed))?;
-                    msg.values.insert(key.to_string(), value.to_string());
+                    msg.values.insert(key, value);
                 }
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
@@ -43,7 +43,7 @@ impl <'a> MessageRead<'a> for odemcdJob {
     }
 }
 
-impl MessageWrite for odemcdJob {
+impl<'a> MessageWrite for odemcdJobf<'a> {
     fn get_size(&self) -> usize {
         0
         + 1 + sizeof_varint(*(&self.job_type) as u64)
